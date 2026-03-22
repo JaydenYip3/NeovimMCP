@@ -12,6 +12,13 @@ function response(value, structured = {}) {
     }
 }
 
+function errorResponse(message) {
+    return {
+        content: [{ type: "text", text: `Error: ${message}` }],
+        isError: true,
+    }
+}
+
 async function getVisualSelection(nvim) {
     const start = await nvim.call("getpos", ["'<"])
     const end = await nvim.call("getpos", ["'>"])
@@ -45,9 +52,25 @@ async function getVisualSelection(nvim) {
 
 export function registerTools(server) {
     let nvimInstance = null
+
     const nvimClient = async () => {
-        if (!nvimInstance) nvimInstance = await getNvim()
+        if (!nvimInstance) {
+            nvimInstance = await getNvim()
+        }
         return nvimInstance
+    }
+
+    const resetConnection = () => {
+        nvimInstance = null
+    }
+
+    const withErrorHandling = (handler) => async (args) => {
+        try {
+            return await handler(args)
+        } catch (err) {
+            resetConnection()
+            return errorResponse(err.message)
+        }
     }
 
     server.registerTool(
@@ -57,7 +80,7 @@ export function registerTools(server) {
             description: "Returns current file, filetype, cursor position, and nearby lines.",
             inputSchema: {},
         },
-        async () => {
+        withErrorHandling(async () => {
             const nvim = await nvimClient()
             const file = await nvim.call("expand", ["%:p"])
             const filetype = await nvim.eval("&filetype")
@@ -74,7 +97,7 @@ export function registerTools(server) {
             }
 
             return response(payload, payload)
-        },
+        }),
     )
 
     server.registerTool(
@@ -87,11 +110,14 @@ export function registerTools(server) {
                 end: z.number().int().nonnegative(),
             },
         },
-        async ({ start, end }) => {
+        withErrorHandling(async ({ start, end }) => {
+            if (start >= end) {
+                return errorResponse("start must be less than end")
+            }
             const nvim = await nvimClient()
             const lines = await nvim.call("getline", [start + 1, end])
             return response(lines.join("\n"), { start, end, lines })
-        },
+        }),
     )
 
     server.registerTool(
@@ -101,11 +127,11 @@ export function registerTools(server) {
             description: "Returns last visual selection based on '< and '> marks.",
             inputSchema: {},
         },
-        async () => {
+        withErrorHandling(async () => {
             const nvim = await nvimClient()
             const selection = await getVisualSelection(nvim)
             return response(selection, selection)
-        },
+        }),
     )
 
     server.registerTool(
@@ -115,13 +141,13 @@ export function registerTools(server) {
             description: "Returns unnamed register text and register type.",
             inputSchema: {},
         },
-        async () => {
+        withErrorHandling(async () => {
             const nvim = await nvimClient()
             const text = await nvim.call("getreg", ['"'])
             const type = await nvim.call("getregtype", ['"'])
             const payload = { text, type }
             return response(payload, payload)
-        },
+        }),
     )
 
     server.registerTool(
@@ -131,10 +157,10 @@ export function registerTools(server) {
             description: "Returns full current buffer content.",
             inputSchema: {},
         },
-        async () => {
+        withErrorHandling(async () => {
             const nvim = await nvimClient()
             const lines = await nvim.call("getline", [1, "$"])
             return response(lines.join("\n"), { lines })
-        },
+        }),
     )
 }
