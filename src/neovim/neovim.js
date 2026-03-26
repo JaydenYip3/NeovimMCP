@@ -8,7 +8,7 @@ let socket = null;
 export async function getNvim() {
     if (instance) return instance;
 
-    const socketPath = "/tmp/nvim.sock"
+    const socketPath = process.env.NVIM_SOCKET_PATH || "/tmp/nvim.sock"
     if (!socketPath) {
         throw new Error(
             "NVIM environment variable not set. " +
