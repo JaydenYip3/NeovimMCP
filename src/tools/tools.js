@@ -51,24 +51,10 @@ async function getVisualSelection(nvim) {
 }
 
 export function registerTools(server) {
-    let nvimInstance = null
-
-    const nvimClient = async () => {
-        if (!nvimInstance) {
-            nvimInstance = await getNvim()
-        }
-        return nvimInstance
-    }
-
-    const resetConnection = () => {
-        nvimInstance = null
-    }
-
     const withErrorHandling = (handler) => async (args) => {
         try {
             return await handler(args)
         } catch (err) {
-            resetConnection()
             return errorResponse(err.message)
         }
     }
@@ -81,7 +67,7 @@ export function registerTools(server) {
             inputSchema: {},
         },
         withErrorHandling(async () => {
-            const nvim = await nvimClient()
+            const nvim = await getNvim()
             const file = await nvim.call("expand", ["%:p"])
             const filetype = await nvim.eval("&filetype")
             const [line, col] = await nvim.call("getcurpos", []).then((p) => [p[1], p[2]])
@@ -114,7 +100,7 @@ export function registerTools(server) {
             if (start >= end) {
                 return errorResponse("start must be less than end")
             }
-            const nvim = await nvimClient()
+            const nvim = await getNvim()
             const lines = await nvim.call("getline", [start + 1, end])
             return response(lines.join("\n"), { start, end, lines })
         }),
@@ -128,7 +114,7 @@ export function registerTools(server) {
             inputSchema: {},
         },
         withErrorHandling(async () => {
-            const nvim = await nvimClient()
+            const nvim = await getNvim()
             const selection = await getVisualSelection(nvim)
             return response(selection, selection)
         }),
@@ -142,7 +128,7 @@ export function registerTools(server) {
             inputSchema: {},
         },
         withErrorHandling(async () => {
-            const nvim = await nvimClient()
+            const nvim = await getNvim()
             const text = await nvim.call("getreg", ['"'])
             const type = await nvim.call("getregtype", ['"'])
             const payload = { text, type }
@@ -158,7 +144,7 @@ export function registerTools(server) {
             inputSchema: {},
         },
         withErrorHandling(async () => {
-            const nvim = await nvimClient()
+            const nvim = await getNvim()
             const lines = await nvim.call("getline", [1, "$"])
             return response(lines.join("\n"), { lines })
         }),
