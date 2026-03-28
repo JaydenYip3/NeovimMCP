@@ -20,15 +20,6 @@ Optional env var:
 
 - `NVIM_BUFFER_PORT` (default `4389`)
 
-## HTTP endpoints (Neovim -> server)
-
-Base URL: `http://127.0.0.1:${NVIM_BUFFER_PORT:-4389}`
-
-- `GET /health`
-- `GET /buffer/list`
-- `POST /buffer/update`
-- `POST /buffer/clear`
-
 Example publish call:
 
 ```bash
