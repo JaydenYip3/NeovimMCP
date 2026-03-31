@@ -79,3 +79,6 @@ Available user commands:
 
 - `:NvimMcpPublish` (force publish current buffer)
 - `:NvimMcpClear` (clear current buffer from server)
+
+TODO:
+Create a mutliplex using C++ to handle multiple instances that can share across the network.
