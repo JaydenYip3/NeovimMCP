@@ -8,6 +8,7 @@ MCP server that receives Neovim buffer updates and exposes editor context as MCP
 - HTTP bridge endpoint Neovim can POST to
 - In-memory buffer store with active buffer tracking
 - Tools for active buffer, list/lookup, cursor context, publish, and clear
+- Bridge written in C++ for mutliple nvim instances
 
 ## Start server
 
