@@ -1,10 +1,10 @@
 import net from "net";
-import { attach } from "neovim";
+import { attach, NeovimClient } from "neovim";
 import fs from "fs";
 
-let socket = null;
-let nvimInstance = null;
-let currentSocketPath = null;
+let socket: net.Socket | null = null;
+let nvimInstance: NeovimClient | null = null;
+let currentSocketPath: string | null = null;
 
 // Path to the txt file that tracks which Neovim instance is currently focused
 const ACTIVE_NVIM_FILE = process.env.NVIM_ACTIVE_FILE || "/tmp/nvim-active.txt";
@@ -13,7 +13,7 @@ const ACTIVE_NVIM_FILE = process.env.NVIM_ACTIVE_FILE || "/tmp/nvim-active.txt";
  * Reads the active Neovim socket path from the tracking file.
  * The tracking file is a plain txt file that Neovim writes to on FocusGained.
  */
-function getActiveSocketPath() {
+function getActiveSocketPath(): string | null {
     // Create tracking file if it doesn't exist
     if (!fs.existsSync(ACTIVE_NVIM_FILE)) {
         fs.writeFileSync(ACTIVE_NVIM_FILE, "", "utf8");
@@ -27,11 +27,11 @@ function getActiveSocketPath() {
 /**
  * Connects to a specific Neovim socket.
  */
-function connectToSocket(socketPath) {
+function connectToSocket(socketPath: string): Promise<NeovimClient> {
     return new Promise((resolve, reject) => {
         socket = net.createConnection(socketPath);
 
-        socket.on("error", (err) => {
+        socket.on("error", (err: Error) => {
             reject(new Error(
                 `Failed to connect to Neovim at ${socketPath}: ${err.message}`
             ));
@@ -46,12 +46,13 @@ function connectToSocket(socketPath) {
         socket.on("connect", async () => {
             try {
                 const nvim = await attach({
-                    reader: socket,
-                    writer: socket,
+                    reader: socket!,
+                    writer: socket!,
                 });
                 resolve(nvim);
             } catch (err) {
-                reject(new Error(`Failed to attach to Neovim: ${err.message}`));
+                const message = err instanceof Error ? err.message : String(err);
+                reject(new Error(`Failed to attach to Neovim: ${message}`));
             }
         });
     });
@@ -61,7 +62,7 @@ function connectToSocket(socketPath) {
  * Connects to the currently active Neovim instance.
  * Automatically reconnects if the focused Neovim instance has changed.
  */
-export async function getNvim() {
+export async function getNvim(): Promise<NeovimClient> {
     const socketPath = getActiveSocketPath();
 
     if (!socketPath) {
@@ -105,7 +106,7 @@ export async function getNvim() {
     return nvimInstance;
 }
 
-export function disconnectNvim() {
+export function disconnectNvim(): void {
     const oldSocket = socket;
     socket = null;
     nvimInstance = null;
