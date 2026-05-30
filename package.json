@@ -1,8 +1,11 @@
 {
   "name": "nvimmcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "",
   "main": "dist/server.js",
+  "bin": {
+    "nvimmcp": "dist/server.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
