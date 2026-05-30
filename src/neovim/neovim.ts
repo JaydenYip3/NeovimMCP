@@ -1,27 +1,49 @@
 import net from "net";
-import { attach, NeovimClient } from "neovim";
 import fs from "fs";
+import { attach, NeovimClient } from "neovim";
 
 let socket: net.Socket | null = null;
 let nvimInstance: NeovimClient | null = null;
 let currentSocketPath: string | null = null;
+let activeSocketPath: string | null = null;
+let registrationServer: net.Server | null = null;
 
-// Path to the txt file that tracks which Neovim instance is currently focused
-const ACTIVE_NVIM_FILE = process.env.NVIM_ACTIVE_FILE || "/tmp/nvim-active.txt";
+const REGISTRATION_SOCKET = process.env.NVIM_MCP_SOCKET || "/tmp/nvim-mcp.sock";
 
 /**
- * Reads the active Neovim socket path from the tracking file.
- * The tracking file is a plain txt file that Neovim writes to on FocusGained.
+ * Starts the registration server that listens for Neovim instances.
+ * Neovim sends its socket path when it gains focus.
  */
-function getActiveSocketPath(): string | null {
-    // Create tracking file if it doesn't exist
-    if (!fs.existsSync(ACTIVE_NVIM_FILE)) {
-        fs.writeFileSync(ACTIVE_NVIM_FILE, "", "utf8");
-        return null;
+export function startRegistrationServer(): void {
+    // Remove stale socket file if it exists
+    if (fs.existsSync(REGISTRATION_SOCKET)) {
+        fs.unlinkSync(REGISTRATION_SOCKET);
     }
 
-    const socketPath = fs.readFileSync(ACTIVE_NVIM_FILE, "utf8").trim();
-    return socketPath || null;
+    registrationServer = net.createServer((conn) => {
+        console.error("[MCP] New connection to registration server");
+
+        conn.on("data", (data) => {
+            const socketPath = data.toString().trim();
+            console.error(`[MCP] Received socket path: "${socketPath}"`);
+
+            if (socketPath && fs.existsSync(socketPath)) {
+                activeSocketPath = socketPath;
+                console.error(`[MCP] Active Neovim set to: ${socketPath}`);
+            } else {
+                console.error(`[MCP] Socket path invalid or doesn't exist`);
+            }
+        });
+    });
+
+    registrationServer.on("error", (err) => {
+        console.error(`Registration server error: ${err.message}`);
+    });
+
+    registrationServer.listen(REGISTRATION_SOCKET, () => {
+        fs.chmodSync(REGISTRATION_SOCKET, 0o777);
+        console.error(`[MCP] Registration server listening on ${REGISTRATION_SOCKET}`);
+    });
 }
 
 /**
@@ -63,32 +85,35 @@ function connectToSocket(socketPath: string): Promise<NeovimClient> {
  * Automatically reconnects if the focused Neovim instance has changed.
  */
 export async function getNvim(): Promise<NeovimClient> {
-    const socketPath = getActiveSocketPath();
+    console.error(`[MCP] getNvim called`);
+    console.error(`[MCP]   activeSocketPath: ${activeSocketPath}`);
+    console.error(`[MCP]   currentSocketPath: ${currentSocketPath}`);
 
-    if (!socketPath) {
+    if (!activeSocketPath) {
         throw new Error(
-            `No active Neovim found. The tracking file (${ACTIVE_NVIM_FILE}) is empty.\n` +
-            "Make sure Neovim is configured to write its socket path on focus:\n" +
-            "  1. Start Neovim with: nvim --listen /tmp/nvim-$$.sock\n" +
-            "  2. Add FocusGained autocmd to write socket path to " + ACTIVE_NVIM_FILE
+            "No active Neovim found.\n" +
+            "Make sure Neovim is configured to register on focus:\n" +
+            `  1. Start Neovim with: nvim --listen /tmp/nvim-$$.sock\n` +
+            `  2. Add FocusGained autocmd to connect to ${REGISTRATION_SOCKET}`
         );
     }
 
-    if (!fs.existsSync(socketPath)) {
+    if (!fs.existsSync(activeSocketPath)) {
+        activeSocketPath = null;
         throw new Error(
-            `Neovim socket not found at: ${socketPath}\n` +
+            "Neovim socket no longer exists.\n" +
             "The Neovim instance that was focused may have closed.\n" +
-            "Focus a running Neovim instance to update the tracking file."
+            "Focus a running Neovim instance to register it."
         );
     }
 
-    // If socket path changed, clean up old connection silently
-    if (currentSocketPath && currentSocketPath !== socketPath) {
+    // If socket path changed, clean up old connection
+    if (currentSocketPath && currentSocketPath !== activeSocketPath) {
+        console.error(`[MCP] Socket changed, reconnecting...`);
         const oldSocket = socket;
         socket = null;
         nvimInstance = null;
         currentSocketPath = null;
-        // Destroy old socket after clearing references to avoid error propagation
         if (oldSocket) {
             oldSocket.removeAllListeners();
             oldSocket.destroy();
@@ -96,13 +121,15 @@ export async function getNvim(): Promise<NeovimClient> {
     }
 
     // Return cached instance if still connected to the same socket
-    if (nvimInstance && currentSocketPath === socketPath) {
+    if (nvimInstance && currentSocketPath === activeSocketPath) {
+        console.error(`[MCP] Returning cached instance`);
         return nvimInstance;
     }
 
-    // Connect to the new socket
-    nvimInstance = await connectToSocket(socketPath);
-    currentSocketPath = socketPath;
+    // Connect to the active socket
+    console.error(`[MCP] Connecting to ${activeSocketPath}`);
+    nvimInstance = await connectToSocket(activeSocketPath);
+    currentSocketPath = activeSocketPath;
     return nvimInstance;
 }
 
@@ -111,8 +138,20 @@ export function disconnectNvim(): void {
     socket = null;
     nvimInstance = null;
     currentSocketPath = null;
+    activeSocketPath = null;
+
     if (oldSocket) {
         oldSocket.removeAllListeners();
         oldSocket.destroy();
+    }
+
+    if (registrationServer) {
+        registrationServer.close();
+        registrationServer = null;
+    }
+
+    // Clean up socket file
+    if (fs.existsSync(REGISTRATION_SOCKET)) {
+        fs.unlinkSync(REGISTRATION_SOCKET);
     }
 }
