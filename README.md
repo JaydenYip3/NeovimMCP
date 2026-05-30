@@ -2,6 +2,11 @@
 
 MCP server that receives Neovim buffer updates and exposes editor context as MCP tools.
 
+
+<img width="1405" height="538" alt="image" src="https://github.com/user-attachments/assets/c98964e7-4c8a-4903-a7d0-b669fdbf1e61" />
+
+<img width="1424" height="550" alt="image" src="https://github.com/user-attachments/assets/3b87054e-4c60-4f41-9fef-f79064aba23d" />
+
 ## Features
 
 - MCP server over stdio for AI clients
