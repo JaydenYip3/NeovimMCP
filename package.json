@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "tsc --watch & node --watch dist/server.js"
+    "dev": "tsc --watch & node --watch dist/server.js",
     "test": "echo \"no tests yet\" && exit 0"
   },
   "repository": {
