@@ -1,19 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { NeovimClient } from "neovim";
-import { getNvim } from "../neovim/neovim.js";
-
-interface Position {
-  line: number;
-  col: number;
-}
-
-interface VisualSelection {
-  lines: string[];
-  text: string;
-  from: Position;
-  to: Position;
-}
+import { list, resolve, type EditorState } from "../state/store.js";
 
 interface ToolResponse {
   [key: string]: unknown;
@@ -43,46 +30,25 @@ function errorResponse(message: string): ToolResponse {
   };
 }
 
-async function getVisualSelection(
-  nvim: NeovimClient,
-): Promise<VisualSelection> {
-  const start = (await nvim.call("getpos", ["'<"])) as number[];
-  const end = (await nvim.call("getpos", ["'>"])) as number[];
-
-  let startLine = start[1];
-  let startCol = start[2];
-  let endLine = end[1];
-  let endCol = end[2];
-
-  if (startLine > endLine || (startLine === endLine && startCol > endCol)) {
-    [startLine, endLine] = [endLine, startLine];
-    [startCol, endCol] = [endCol, startCol];
-  }
-
-  const lines = (await nvim.call("getline", [startLine, endLine])) as string[];
-
-  if (lines.length === 0) {
-    return {
-      lines: [],
-      text: "",
-      from: { line: startLine, col: startCol },
-      to: { line: endLine, col: endCol },
-    };
-  }
-
-  lines[0] = lines[0].slice(Math.max(0, startCol - 1));
-  lines[lines.length - 1] = lines[lines.length - 1].slice(
-    0,
-    Math.max(0, endCol),
-  );
-
+/** Milliseconds since the instance last pushed, so callers can spot stale data. */
+function freshness(state: EditorState): Record<string, unknown> {
   return {
-    lines,
-    text: lines.join("\n"),
-    from: { line: startLine, col: startCol },
-    to: { line: endLine, col: endCol },
+    instance: state.instance,
+    name: state.name,
+    age_ms: Date.now() - state.updatedAt,
   };
 }
+
+const instanceArg = {
+  instance: z
+    .string()
+    .optional()
+    .describe(
+      "Neovim instance id to read from. Defaults to the focused instance.",
+    ),
+};
+
+type InstanceArgs = { instance?: string };
 
 type ToolHandler<T = Record<string, unknown>> = (
   args: T,
@@ -101,29 +67,45 @@ export function registerTools(server: McpServer): void {
   };
 
   server.registerTool(
+    "list_editors",
+    {
+      title: "List Neovim Instances",
+      description:
+        "Lists every Neovim instance currently pushing state to this server.",
+      inputSchema: {},
+    },
+    withErrorHandling(async () => {
+      const editors = list().map((state) => ({
+        ...freshness(state),
+        file: state.file.absolute,
+        filetype: state.filetype,
+        line_count: state.lines.length,
+      }));
+      return response(editors, { editors });
+    }),
+  );
+
+  server.registerTool(
     "get_cursor_context",
     {
       title: "Get Cursor Context",
       description:
         "Returns current file, filetype, cursor position, and nearby lines.",
-      inputSchema: {},
+      inputSchema: instanceArg,
     },
-    withErrorHandling(async () => {
-      const nvim = await getNvim();
-      const file = (await nvim.call("expand", ["%:p"])) as string;
-      const filetype = (await nvim.eval("&filetype")) as string;
-      const pos = (await nvim.call("getcurpos", [])) as number[];
-      const line = pos[1];
-      const col = pos[2];
+    withErrorHandling(async ({ instance }: InstanceArgs) => {
+      const state = resolve(instance);
+      const line = state.cursor.line;
       const start = Math.max(1, line - 5);
-      const finish = line + 5;
-      const nearby = (await nvim.call("getline", [start, finish])) as string[];
+      const finish = Math.min(state.lines.length, line + 5);
+      const nearby = state.lines.slice(start - 1, finish);
 
       const payload = {
-        file,
-        filetype,
-        cursor: { line, col },
+        file: state.file.absolute,
+        filetype: state.filetype,
+        cursor: state.cursor,
         nearby,
+        ...freshness(state),
       };
 
       return response(payload, payload);
@@ -139,19 +121,26 @@ export function registerTools(server: McpServer): void {
       inputSchema: {
         start: z.number().int().nonnegative(),
         end: z.number().int().nonnegative(),
+        ...instanceArg,
       },
     },
     withErrorHandling(
-      async ({ start, end }: { start: number; end: number }) => {
+      async ({
+        start,
+        end,
+        instance,
+      }: InstanceArgs & { start: number; end: number }) => {
         if (start >= end) {
           return errorResponse("start must be less than end");
         }
-        const nvim = await getNvim();
-        const lines = (await nvim.call("getline", [
-          start + 1,
+        const state = resolve(instance);
+        const lines = state.lines.slice(start, end);
+        return response(lines.join("\n"), {
+          start,
           end,
-        ])) as string[];
-        return response(lines.join("\n"), { start, end, lines });
+          lines,
+          ...freshness(state),
+        });
       },
     ),
   );
@@ -161,15 +150,18 @@ export function registerTools(server: McpServer): void {
     {
       title: "Get Visual Selection",
       description: "Returns last visual selection based on '< and '> marks.",
-      inputSchema: {},
+      inputSchema: instanceArg,
     },
-    withErrorHandling(async () => {
-      const nvim = await getNvim();
-      const selection = await getVisualSelection(nvim);
-      return response(
-        selection,
-        selection as unknown as Record<string, unknown>,
-      );
+    withErrorHandling(async ({ instance }: InstanceArgs) => {
+      const state = resolve(instance);
+      const selection = state.selection ?? {
+        lines: [],
+        text: "",
+        from: { line: 0, col: 0 },
+        to: { line: 0, col: 0 },
+      };
+      const payload = { ...selection, ...freshness(state) };
+      return response(payload, payload);
     }),
   );
 
@@ -178,13 +170,12 @@ export function registerTools(server: McpServer): void {
     {
       title: "Get Yank Register",
       description: "Returns unnamed register text and register type.",
-      inputSchema: {},
+      inputSchema: instanceArg,
     },
-    withErrorHandling(async () => {
-      const nvim = await getNvim();
-      const text = (await nvim.call("getreg", ['"'])) as string;
-      const type = (await nvim.call("getregtype", ['"'])) as string;
-      const payload = { text, type };
+    withErrorHandling(async ({ instance }: InstanceArgs) => {
+      const state = resolve(instance);
+      const yank = state.yank ?? { text: "", type: "" };
+      const payload = { ...yank, ...freshness(state) };
       return response(payload, payload);
     }),
   );
@@ -194,29 +185,31 @@ export function registerTools(server: McpServer): void {
     {
       title: "Get Full File",
       description: "Returns full current buffer content.",
-      inputSchema: {},
+      inputSchema: instanceArg,
     },
-    withErrorHandling(async () => {
-      const nvim = await getNvim();
-      const lines = (await nvim.call("getline", [1, "$"])) as string[];
-      return response(lines.join("\n"), { lines });
+    withErrorHandling(async ({ instance }: InstanceArgs) => {
+      const state = resolve(instance);
+      return response(state.lines.join("\n"), {
+        lines: state.lines,
+        ...freshness(state),
+      });
     }),
   );
+
   server.registerTool(
     "get_path",
     {
       title: "Get file path absolute and relative",
       description:
         "Returns the absolute and relative path of the current file.",
-      inputSchema: {},
+      inputSchema: instanceArg,
     },
-    withErrorHandling(async () => {
-      const nvim = await getNvim();
-      const absolute_path = (await nvim.eval('expand("%:p")')) as string;
-      const relative_path = (await nvim.eval('expand("%:.")')) as string;
+    withErrorHandling(async ({ instance }: InstanceArgs) => {
+      const state = resolve(instance);
       const payload = {
-        relative_file_path: relative_path,
-        absolute_file_path: absolute_path,
+        relative_file_path: state.file.relative,
+        absolute_file_path: state.file.absolute,
+        ...freshness(state),
       };
       return response(payload, payload);
     }),
